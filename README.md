@@ -19,5 +19,5 @@ A Discord bot that lets server admins add riddles, allows users to guess answers
 
 ### 1. Fork or clone the repo
 ```bash
-git clone https://github.com/yourusername/riddle-bot.git
-cd riddle-bot
+git clone https://github.com/yourusername/riddlebot.git
+cd riddlebot
