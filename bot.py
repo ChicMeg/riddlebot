@@ -64,7 +64,7 @@ async def add_riddle(ctx, *, riddle_and_answer):
         riddle, answer = riddle_and_answer.split("|")
         riddles[riddle.strip()] = answer.strip().lower()
         await ctx.send("🧠 Riddle added!")
-        # Save riddles immediately to ensure persistence
+        # Save riddles immediately
         with open(RIDDLE_FILE, "w") as f:
             json.dump(riddles, f)
     except ValueError:
@@ -126,8 +126,3 @@ async def on_message(message):
 
 # ---------- Run the Bot ----------
 bot.run(TOKEN)
-
-        with open(SCORE_FILE, "w") as f:
-            json.dump(scores, f)
-    else:
-        await message.add_reaction("❌")
