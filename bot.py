@@ -12,7 +12,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
 
-# Flask health check server
+# Flask server for Render.com health checks
 app = Flask(__name__)
 
 @app.route("/")
@@ -24,7 +24,7 @@ def run_web():
 
 threading.Thread(target=run_web).start()
 
-# Discord bot setup
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -35,10 +35,8 @@ RIDDLES_FILE = "riddles.json"
 IGNORED_FILE = "ignored_channels.json"
 LISTENED_FILE = "listened_channels.json"
 
-# Cooldown in seconds (5 minutes)
-COOLDOWN = 300
+COOLDOWN = 300  # 5 minutes
 
-# Load JSON helper
 def load_json(file, default):
     if os.path.exists(file):
         with open(file, "r") as f:
@@ -52,18 +50,15 @@ def save_json(file, data):
     with open(file, "w") as f:
         json.dump(data, f)
 
-# Persistent data
 scores = load_json(SCORES_FILE, {})
 riddles = load_json(RIDDLES_FILE, {})
 IGNORED_CHANNELS = load_json(IGNORED_FILE, [])
 LISTENED_CHANNELS = load_json(LISTENED_FILE, [])
 
-# 🔒 Fix: Ensure LISTENED_CHANNELS is a list
 if not isinstance(LISTENED_CHANNELS, list):
     LISTENED_CHANNELS = [LISTENED_CHANNELS]
     save_json(LISTENED_FILE, LISTENED_CHANNELS)
 
-# Runtime state
 guess_timestamps = {}
 pending_riddle_creations = {}
 current_riddle = {"question": None, "answer": None}
@@ -76,7 +71,6 @@ def save_data():
 def save_ignored():
     save_json(IGNORED_FILE, IGNORED_CHANNELS)
 
-# Global check: only respond in allowed channels
 @bot.check
 async def globally_ignore_channels(ctx):
     return ctx.channel.id in LISTENED_CHANNELS
@@ -88,91 +82,77 @@ async def on_ready():
     if default_channel_id not in LISTENED_CHANNELS:
         LISTENED_CHANNELS.append(default_channel_id)
         save_data()
-    await bot.tree.sync()
 
-# Slash command: Add riddle
-@bot.tree.command(name="addriddle", description="Add a riddle (admin only)")
+# Traditional commands below:
+
+@bot.command(name="addriddle")
 @commands.has_permissions(administrator=True)
-async def addriddle(interaction: discord.Interaction, question: str):
-    user_id = interaction.user.id
+async def addriddle(ctx, *, question: str):
+    user_id = ctx.author.id
     pending_riddle_creations[user_id] = question.strip()
-    await interaction.response.send_message(
-        f"📝 Got it! Riddle: `{question}`\nNow send the **answer** in this channel.",
-        ephemeral=True
+    await ctx.author.send(
+        f"📝 Got your riddle: `{question}`\nPlease send the **answer** here in DM."
     )
 
-# Slash command: Delete riddle
-@bot.tree.command(name="deleteriddle", description="Delete a riddle")
+@bot.command(name="deleteriddle")
 @commands.has_permissions(administrator=True)
-async def deleteriddle(interaction: discord.Interaction, question: str):
-    question = question.strip()
+async def deleteriddle(ctx, *, question: str):
     if question in riddles:
         del riddles[question]
         save_data()
-        await interaction.response.send_message("🗑️ Riddle deleted.", ephemeral=True)
+        await ctx.send("🗑️ Riddle deleted.")
     else:
-        await interaction.response.send_message("❌ Riddle not found.", ephemeral=True)
+        await ctx.send("❌ Riddle not found.")
 
-# Slash command: Cancel riddle creation
-@bot.tree.command(name="cancel", description="Cancel riddle creation")
-async def cancel(interaction: discord.Interaction):
-    user_id = interaction.user.id
+@bot.command(name="cancel")
+async def cancel(ctx):
+    user_id = ctx.author.id
     if user_id in pending_riddle_creations:
         pending_riddle_creations.pop(user_id)
-        await interaction.response.send_message("❌ Riddle creation cancelled.", ephemeral=True)
+        await ctx.send("❌ Riddle creation cancelled.")
     else:
-        await interaction.response.send_message("⚠️ No riddle in progress.", ephemeral=True)
+        await ctx.send("⚠️ No riddle in progress.")
 
-# Slash command: Add channel to listen list
-@bot.tree.command(name="listen", description="Tell bot to listen to a channel")
+@bot.command(name="listen")
 @commands.has_permissions(administrator=True)
-async def listen(interaction: discord.Interaction, channel: discord.TextChannel):
+async def listen(ctx, channel: discord.TextChannel):
     if channel.id not in LISTENED_CHANNELS:
         LISTENED_CHANNELS.append(channel.id)
         save_data()
-        await interaction.response.send_message(f"✅ Now listening to {channel.mention}.", ephemeral=True)
+        await ctx.send(f"✅ Now listening to {channel.mention}.")
     else:
-        await interaction.response.send_message(f"⚠️ Already listening to {channel.mention}.", ephemeral=True)
+        await ctx.send(f"⚠️ Already listening to {channel.mention}.")
 
-# Slash command: Ignore a channel
-@bot.tree.command(name="ignore", description="Tell bot to ignore a channel")
+@bot.command(name="ignore")
 @commands.has_permissions(administrator=True)
-async def ignore(interaction: discord.Interaction, channel: discord.TextChannel):
+async def ignore(ctx, channel: discord.TextChannel):
     if channel.id not in IGNORED_CHANNELS:
         IGNORED_CHANNELS.append(channel.id)
         save_ignored()
-        await interaction.response.send_message(f"✅ Now ignoring {channel.mention}.", ephemeral=True)
+        await ctx.send(f"✅ Now ignoring {channel.mention}.")
     else:
-        await interaction.response.send_message(f"⚠️ Already ignoring {channel.mention}.", ephemeral=True)
+        await ctx.send(f"⚠️ Already ignoring {channel.mention}.")
 
-# Slash command: Leaderboard
-@bot.tree.command(name="leaderboard", description="Show top riddle solvers")
-async def leaderboard(interaction: discord.Interaction):
+@bot.command(name="leaderboard")
+async def leaderboard(ctx):
     if not scores:
-        await interaction.response.send_message("No scores yet.", ephemeral=True)
+        await ctx.send("No scores yet.")
         return
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     msg = "\n".join(f"**{i+1}.** {user} - {score}" for i, (user, score) in enumerate(sorted_scores[:10]))
-    await interaction.response.send_message(f"🏆 **Leaderboard:**\n{msg}", ephemeral=True)
+    await ctx.send(f"🏆 **Leaderboard:**\n{msg}")
 
-# Handle user guesses and riddle answers
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author == bot.user:
-        return
-
-    if not isinstance(LISTENED_CHANNELS, list):
-        return
-
-    if message.channel.id not in LISTENED_CHANNELS:
+    if message.author == bot.user or message.channel.id not in LISTENED_CHANNELS:
         return
 
     user_id = message.author.id
     content = message.content.strip()
 
-    # Admin submits riddle answer
+    # Riddle answer input by admin
     if user_id in pending_riddle_creations:
         question = pending_riddle_creations.pop(user_id)
         riddles[question] = content.lower()
@@ -206,9 +186,8 @@ async def on_message(message):
     else:
         await message.add_reaction("❌")
 
-# Start bot
 if not TOKEN:
-    print("❌ DISCORD_TOKEN is not set. Check your environment variables.")
+    print("❌ DISCORD_TOKEN is not set.")
 else:
     print("✅ Starting bot...")
     bot.run(TOKEN)
