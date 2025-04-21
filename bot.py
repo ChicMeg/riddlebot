@@ -6,23 +6,23 @@ import random
 import atexit
 import time
 from collections import defaultdict
+from dotenv import load_dotenv
 
-# Load Discord token from environment variable
+# ---------- Environment Setup ----------
+load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# Setup bot with message content intent
+# ---------- Bot Setup ----------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ---------- Riddle and Score Storage ----------
-
-riddles = {}
-
+# ---------- Storage ----------
 SCORE_FILE = "scores.json"
+RIDDLE_FILE = "riddles.json"
 COOLDOWN_SECONDS = 300  # 5 minutes
 
-# Load scores if file exists
+# Load scores from file
 if os.path.exists(SCORE_FILE):
     with open(SCORE_FILE, "r") as f:
         raw_scores = json.load(f)
@@ -30,17 +30,22 @@ if os.path.exists(SCORE_FILE):
 else:
     scores = defaultdict(int)
 
-# Save scores when bot exits
+# Load riddles from file
+if os.path.exists(RIDDLE_FILE):
+    with open(RIDDLE_FILE, "r") as f:
+        riddles = json.load(f)
+else:
+    riddles = {}
+
+# Save scores and riddles on exit
 @atexit.register
-def save_scores():
+def save_data():
     with open(SCORE_FILE, "w") as f:
         json.dump(scores, f)
-
-# Track last guess timestamps per riddle
-bot.last_guess_times = {}  # user_id -> timestamp
+    with open(RIDDLE_FILE, "w") as f:
+        json.dump(riddles, f)
 
 # ---------- Permissions ----------
-
 def is_admin():
     async def predicate(ctx):
         return ctx.author.guild_permissions.administrator
@@ -59,6 +64,9 @@ async def add_riddle(ctx, *, riddle_and_answer):
         riddle, answer = riddle_and_answer.split("|")
         riddles[riddle.strip()] = answer.strip().lower()
         await ctx.send("🧠 Riddle added!")
+        # Save riddles immediately to ensure persistence
+        with open(RIDDLE_FILE, "w") as f:
+            json.dump(riddles, f)
     except ValueError:
         await ctx.send("Usage: `!addriddle riddle here | answer`")
 
@@ -111,8 +119,14 @@ async def on_message(message):
     if user_answer == correct_answer:
         await message.add_reaction("✅")
         scores[str(message.author)] += 1
+        with open(SCORE_FILE, "w") as f:
+            json.dump(scores, f)
+    else:
+        await message.add_reaction("❌")
 
-        # Save scores immediately
+# ---------- Run the Bot ----------
+bot.run(TOKEN)
+
         with open(SCORE_FILE, "w") as f:
             json.dump(scores, f)
     else:
