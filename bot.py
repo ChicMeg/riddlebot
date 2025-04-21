@@ -88,7 +88,7 @@ async def leaderboard(ctx):
         return
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top = "\n".join([f"{i+1}. {user}: {score}" for i, (user, score) in enumerate(sorted_scores[:10])])
+    top = "\n".join([f"{i + 1}. {user}: {score}" for i, (user, score) in enumerate(sorted_scores[:10])])
     await ctx.send(f"🏆 **Leaderboard**:\n{top}")
 
 @bot.event
