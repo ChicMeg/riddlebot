@@ -1,3 +1,4 @@
 .env
 scores.json
+riddles.json
 __pycache__/
