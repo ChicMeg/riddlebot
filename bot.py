@@ -1,128 +1,130 @@
+import os
+import json
+import time
+import threading
+from flask import Flask
+from dotenv import load_dotenv
 import discord
 from discord.ext import commands
-import json
-import os
-import random
-import atexit
-import time
-from collections import defaultdict
-from dotenv import load_dotenv
 
-# ---------- Environment Setup ----------
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+PORT = int(os.environ.get("PORT", 4000))
 
-# ---------- Bot Setup ----------
+# Flask web server setup
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Riddle bot is alive!"
+
+def run_web():
+    app.run(host="0.0.0.0", port=PORT)
+
+threading.Thread(target=run_web).start()
+
+# Discord bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ---------- Storage ----------
-SCORE_FILE = "scores.json"
-RIDDLE_FILE = "riddles.json"
-COOLDOWN_SECONDS = 300  # 5 minutes
+# Data files
+SCORES_FILE = "scores.json"
+RIDDLES_FILE = "riddles.json"
+COOLDOWN = 300  # 5 minutes
 
-# Load scores from file
-if os.path.exists(SCORE_FILE):
-    with open(SCORE_FILE, "r") as f:
-        raw_scores = json.load(f)
-        scores = defaultdict(int, raw_scores)
+# Load or initialize data
+if os.path.exists(SCORES_FILE):
+    with open(SCORES_FILE, "r") as f:
+        scores = json.load(f)
 else:
-    scores = defaultdict(int)
+    scores = {}
 
-# Load riddles from file
-if os.path.exists(RIDDLE_FILE):
-    with open(RIDDLE_FILE, "r") as f:
+if os.path.exists(RIDDLES_FILE):
+    with open(RIDDLES_FILE, "r") as f:
         riddles = json.load(f)
 else:
     riddles = {}
 
-# Save scores and riddles on exit
-@atexit.register
+guess_timestamps = {}  # cooldown tracking
+current_riddle = {"question": None, "answer": None}
+
+# Utility to save data
 def save_data():
-    with open(SCORE_FILE, "w") as f:
+    with open(SCORES_FILE, "w") as f:
         json.dump(scores, f)
-    with open(RIDDLE_FILE, "w") as f:
+    with open(RIDDLES_FILE, "w") as f:
         json.dump(riddles, f)
-
-# ---------- Permissions ----------
-def is_admin():
-    async def predicate(ctx):
-        return ctx.author.guild_permissions.administrator
-    return commands.check(predicate)
-
-# ---------- Events & Commands ----------
 
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
 
 @bot.command(name="addriddle")
-@is_admin()
-async def add_riddle(ctx, *, riddle_and_answer):
+@commands.has_permissions(administrator=True)
+async def addriddle(ctx, *, arg):
     try:
-        riddle, answer = riddle_and_answer.split("|")
-        riddles[riddle.strip()] = answer.strip().lower()
-        await ctx.send("🧠 Riddle added!")
-        # Save riddles immediately
-        with open(RIDDLE_FILE, "w") as f:
-            json.dump(riddles, f)
+        question, answer = arg.split("|")
+        riddles[question.strip()] = answer.strip().lower()
+        save_data()
+        await ctx.send("✅ Riddle added!")
     except ValueError:
-        await ctx.send("Usage: `!addriddle riddle here | answer`")
+        await ctx.send("❌ Usage: `!addriddle What has keys but can't open locks? | A piano`")
 
 @bot.command(name="riddle")
-async def post_riddle(ctx):
+async def riddle(ctx):
     if not riddles:
-        await ctx.send("No riddles available.")
+        await ctx.send("⚠️ No riddles available.")
         return
-
-    riddle = random.choice(list(riddles.keys()))
-    bot.current_riddle = riddle
-    bot.last_guess_times = {}  # Reset cooldowns per riddle
-    await ctx.send(f"🧩 **Riddle:** {riddle}")
+    question = next(iter(riddles))
+    answer = riddles[question]
+    current_riddle["question"] = question
+    current_riddle["answer"] = answer
+    guess_timestamps.clear()
+    await ctx.send(f"🧩 **Riddle:** {question}")
 
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
     if not scores:
-        await ctx.send("No scores yet!")
+        await ctx.send("No scores yet.")
         return
-
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top = "\n".join([f"{i + 1}. {user}: {score}" for i, (user, score) in enumerate(sorted_scores[:10])])
-    await ctx.send(f"🏆 **Leaderboard**:\n{top}")
+    msg = "\n".join(f"**{i+1}.** {user} - {score}" for i, (user, score) in enumerate(sorted_scores[:10]))
+    await ctx.send(f"🏆 **Leaderboard:**\n{msg}")
 
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author == bot.user or not hasattr(bot, "current_riddle"):
+    if (
+        message.author == bot.user
+        or current_riddle["question"] is None
+        or message.content.startswith("!")
+    ):
         return
 
-    user_id = message.author.id
+    user_id = str(message.author.id)
     now = time.time()
+    last_guess = guess_timestamps.get(user_id, 0)
 
-    # Cooldown check
-    last_guess = bot.last_guess_times.get(user_id, 0)
-    if now - last_guess < COOLDOWN_SECONDS:
-        time_left = int(COOLDOWN_SECONDS - (now - last_guess))
-        minutes, seconds = divmod(time_left, 60)
-        await message.channel.send(f"{message.author.mention}, you can guess again in {minutes}m {seconds}s.")
+    if now - last_guess < COOLDOWN:
+        time_left = int(COOLDOWN - (now - last_guess))
+        mins, secs = divmod(time_left, 60)
+        await message.channel.send(
+            f"⏳ {message.author.mention}, wait {mins}m {secs}s before guessing again."
+        )
         return
 
-    # Record guess time
-    bot.last_guess_times[user_id] = now
+    guess_timestamps[user_id] = now
+    guess = message.content.lower().strip()
+    correct = current_riddle["answer"]
 
-    riddle = bot.current_riddle
-    correct_answer = riddles.get(riddle, "").lower()
-    user_answer = message.content.lower().strip()
-
-    if user_answer == correct_answer:
+    if guess == correct:
         await message.add_reaction("✅")
-        scores[str(message.author)] += 1
-        with open(SCORE_FILE, "w") as f:
-            json.dump(scores, f)
+        scores[str(message.author)] = scores.get(str(message.author), 0) + 1
+        save_data()
     else:
         await message.add_reaction("❌")
 
-# ---------- Run the Bot ----------
 bot.run(TOKEN)
