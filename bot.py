@@ -12,7 +12,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
 
-# Flask health check web server
+# Flask health check server
 app = Flask(__name__)
 
 @app.route("/")
@@ -38,11 +38,14 @@ LISTENED_FILE = "listened_channels.json"
 # Cooldown in seconds (5 minutes)
 COOLDOWN = 300
 
-# Load JSON data
+# Load JSON helper
 def load_json(file, default):
     if os.path.exists(file):
         with open(file, "r") as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return default
     return default
 
 def save_json(file, data):
@@ -54,6 +57,11 @@ scores = load_json(SCORES_FILE, {})
 riddles = load_json(RIDDLES_FILE, {})
 IGNORED_CHANNELS = load_json(IGNORED_FILE, [])
 LISTENED_CHANNELS = load_json(LISTENED_FILE, [])
+
+# 🔒 Fix: Ensure LISTENED_CHANNELS is a list
+if not isinstance(LISTENED_CHANNELS, list):
+    LISTENED_CHANNELS = [LISTENED_CHANNELS]
+    save_json(LISTENED_FILE, LISTENED_CHANNELS)
 
 # Runtime state
 guess_timestamps = {}
@@ -68,12 +76,11 @@ def save_data():
 def save_ignored():
     save_json(IGNORED_FILE, IGNORED_CHANNELS)
 
-# Command filter for only listened channels
+# Global check: only respond in allowed channels
 @bot.check
 async def globally_ignore_channels(ctx):
     return ctx.channel.id in LISTENED_CHANNELS
 
-# On ready
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
@@ -83,7 +90,7 @@ async def on_ready():
         save_data()
     await bot.tree.sync()
 
-# Slash command: Add riddle (admin only)
+# Slash command: Add riddle
 @bot.tree.command(name="addriddle", description="Add a riddle (admin only)")
 @commands.has_permissions(administrator=True)
 async def addriddle(interaction: discord.Interaction, question: str):
@@ -116,8 +123,8 @@ async def cancel(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⚠️ No riddle in progress.", ephemeral=True)
 
-# Slash command: Listen to channel
-@bot.tree.command(name="listen", description="Add a channel to bot's listening list")
+# Slash command: Add channel to listen list
+@bot.tree.command(name="listen", description="Tell bot to listen to a channel")
 @commands.has_permissions(administrator=True)
 async def listen(interaction: discord.Interaction, channel: discord.TextChannel):
     if channel.id not in LISTENED_CHANNELS:
@@ -128,18 +135,18 @@ async def listen(interaction: discord.Interaction, channel: discord.TextChannel)
         await interaction.response.send_message(f"⚠️ Already listening to {channel.mention}.", ephemeral=True)
 
 # Slash command: Ignore a channel
-@bot.tree.command(name="ignore", description="Ignore a specific channel")
+@bot.tree.command(name="ignore", description="Tell bot to ignore a channel")
 @commands.has_permissions(administrator=True)
 async def ignore(interaction: discord.Interaction, channel: discord.TextChannel):
     if channel.id not in IGNORED_CHANNELS:
         IGNORED_CHANNELS.append(channel.id)
         save_ignored()
-        await interaction.response.send_message(f"✅ Ignoring {channel.mention}.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Now ignoring {channel.mention}.", ephemeral=True)
     else:
         await interaction.response.send_message(f"⚠️ Already ignoring {channel.mention}.", ephemeral=True)
 
 # Slash command: Leaderboard
-@bot.tree.command(name="leaderboard", description="Show the riddle leaderboard")
+@bot.tree.command(name="leaderboard", description="Show top riddle solvers")
 async def leaderboard(interaction: discord.Interaction):
     if not scores:
         await interaction.response.send_message("No scores yet.", ephemeral=True)
@@ -148,18 +155,24 @@ async def leaderboard(interaction: discord.Interaction):
     msg = "\n".join(f"**{i+1}.** {user} - {score}" for i, (user, score) in enumerate(sorted_scores[:10]))
     await interaction.response.send_message(f"🏆 **Leaderboard:**\n{msg}", ephemeral=True)
 
-# Handle messages for answers and guesses
+# Handle user guesses and riddle answers
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author == bot.user or message.channel.id not in LISTENED_CHANNELS:
+    if message.author == bot.user:
+        return
+
+    if not isinstance(LISTENED_CHANNELS, list):
+        return
+
+    if message.channel.id not in LISTENED_CHANNELS:
         return
 
     user_id = message.author.id
     content = message.content.strip()
 
-    # Admin submitting answer
+    # Admin submits riddle answer
     if user_id in pending_riddle_creations:
         question = pending_riddle_creations.pop(user_id)
         riddles[question] = content.lower()
@@ -169,11 +182,9 @@ async def on_message(message):
         )
         return
 
-    # No current riddle to guess
     if current_riddle["question"] is None or content.startswith("!"):
         return
 
-    # Guess cooldown
     now = time.time()
     last_guess = guess_timestamps.get(user_id, 0)
     if now - last_guess < COOLDOWN:
@@ -197,7 +208,7 @@ async def on_message(message):
 
 # Start bot
 if not TOKEN:
-    print("❌ DISCORD_TOKEN is not set. Check your .env or Render environment.")
+    print("❌ DISCORD_TOKEN is not set. Check your environment variables.")
 else:
     print("✅ Starting bot...")
     bot.run(TOKEN)
