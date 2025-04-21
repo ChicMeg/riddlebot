@@ -12,12 +12,12 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
 
-# Flask web server setup
+# Flask web server for Render
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Riddle bot is alive!"
+    return "Riddle bot is running!"
 
 def run_web():
     app.run(host="0.0.0.0", port=PORT)
@@ -29,102 +29,86 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Data files
+# File paths
 SCORES_FILE = "scores.json"
 RIDDLES_FILE = "riddles.json"
-COOLDOWN = 300  # 5 minutes
+IGNORED_FILE = "ignored_channels.json"
 
-# Load or initialize data
-if os.path.exists(SCORES_FILE):
-    with open(SCORES_FILE, "r") as f:
-        scores = json.load(f)
-else:
-    scores = {}
+# Cooldown in seconds (5 minutes)
+COOLDOWN = 300
 
-if os.path.exists(RIDDLES_FILE):
-    with open(RIDDLES_FILE, "r") as f:
-        riddles = json.load(f)
-else:
-    riddles = {}
+# Load JSON helper
+def load_json(file, default):
+    if os.path.exists(file):
+        with open(file, "r") as f:
+            return json.load(f)
+    return default
 
-guess_timestamps = {}  # cooldown tracking
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f)
+
+# Persistent data
+scores = load_json(SCORES_FILE, {})
+riddles = load_json(RIDDLES_FILE, {})
+IGNORED_CHANNELS = load_json(IGNORED_FILE, [])
+
+# Track cooldowns and pending riddle creations
+guess_timestamps = {}
+pending_riddle_creations = {}  # user_id: question
 current_riddle = {"question": None, "answer": None}
 
-# Utility to save data
+# Save all data
 def save_data():
-    with open(SCORES_FILE, "w") as f:
-        json.dump(scores, f)
-    with open(RIDDLES_FILE, "w") as f:
-        json.dump(riddles, f)
+    save_json(SCORES_FILE, scores)
+    save_json(RIDDLES_FILE, riddles)
 
+def save_ignored():
+    save_json(IGNORED_FILE, IGNORED_CHANNELS)
+
+# Global command check to skip ignored channels
+@bot.check
+async def globally_ignore_channels(ctx):
+    return ctx.channel.id not in IGNORED_CHANNELS
+
+# Bot is ready
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    await bot.tree.sync()  # Sync the slash commands with Discord
 
-@bot.command(name="addriddle")
+# Flask web server route for health check
+@app.route("/")
+def index():
+    return "Riddle bot is running!"
+
+# Admin: Add a new riddle (step 1) via slash command
+@bot.tree.command(name="addriddle")
 @commands.has_permissions(administrator=True)
-async def addriddle(ctx, *, arg):
-    try:
-        question, answer = arg.split("|")
-        riddles[question.strip()] = answer.strip().lower()
+async def addriddle(interaction: discord.Interaction, question: str):
+    user_id = interaction.user.id
+    pending_riddle_creations[user_id] = question.strip()
+
+    # Prompt the admin to send the answer in the same channel
+    await interaction.response.send_message(
+        f"📝 Got it! You've added a new riddle: `{question}`.\n\n"
+        "Now, send the **answer** to this riddle in this same channel.",
+        ephemeral=True
+    )
+
+# Admin: Delete a riddle via slash command
+@bot.tree.command(name="deleteriddle")
+@commands.has_permissions(administrator=True)
+async def deleteriddle(interaction: discord.Interaction, question: str):
+    question = question.strip()
+    if question in riddles:
+        del riddles[question]
         save_data()
-        await ctx.send("✅ Riddle added!")
-    except ValueError:
-        await ctx.send("❌ Usage: `!addriddle What has keys but can't open locks? | A piano`")
-
-@bot.command(name="riddle")
-async def riddle(ctx):
-    if not riddles:
-        await ctx.send("⚠️ No riddles available.")
-        return
-    question = next(iter(riddles))
-    answer = riddles[question]
-    current_riddle["question"] = question
-    current_riddle["answer"] = answer
-    guess_timestamps.clear()
-    await ctx.send(f"🧩 **Riddle:** {question}")
-
-@bot.command(name="leaderboard")
-async def leaderboard(ctx):
-    if not scores:
-        await ctx.send("No scores yet.")
-        return
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    msg = "\n".join(f"**{i+1}.** {user} - {score}" for i, (user, score) in enumerate(sorted_scores[:10]))
-    await ctx.send(f"🏆 **Leaderboard:**\n{msg}")
-
-@bot.event
-async def on_message(message):
-    await bot.process_commands(message)
-
-    if (
-        message.author == bot.user
-        or current_riddle["question"] is None
-        or message.content.startswith("!")
-    ):
-        return
-
-    user_id = str(message.author.id)
-    now = time.time()
-    last_guess = guess_timestamps.get(user_id, 0)
-
-    if now - last_guess < COOLDOWN:
-        time_left = int(COOLDOWN - (now - last_guess))
-        mins, secs = divmod(time_left, 60)
-        await message.channel.send(
-            f"⏳ {message.author.mention}, wait {mins}m {secs}s before guessing again."
-        )
-        return
-
-    guess_timestamps[user_id] = now
-    guess = message.content.lower().strip()
-    correct = current_riddle["answer"]
-
-    if guess == correct:
-        await message.add_reaction("✅")
-        scores[str(message.author)] = scores.get(str(message.author), 0) + 1
-        save_data()
+        await interaction.response.send_message("🗑️ Riddle deleted.", ephemeral=True)
     else:
-        await message.add_reaction("❌")
+        await interaction.response.send_message("❌ Riddle not found.", ephemeral=True)
 
-bot.run(TOKEN)
+# Admin: Cancel riddle creation via slash command
+@bot.tree.command(name="cancel")
+async def cancel(interaction: discord.Interaction):
+    user_id_
