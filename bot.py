@@ -79,6 +79,13 @@ async def globally_ignore_channels(ctx):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+
+    # Add default channel to the list of listened channels if it's not there
+    default_channel_id = 1361523942829068468
+    if default_channel_id not in LISTENED_CHANNELS:
+        LISTENED_CHANNELS.append(default_channel_id)
+        save_data()
+
     await bot.tree.sync()  # Sync the slash commands with Discord
 
 # Flask web server route for health check
@@ -207,4 +214,3 @@ async def on_message(message):
 
 # Start bot
 bot.run(TOKEN)
-
