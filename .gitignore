@@ -2,3 +2,4 @@
 scores.json
 riddles.json
 __pycache__/
+*.pyc
