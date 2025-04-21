@@ -78,6 +78,16 @@ async def globally_ignore_channels(ctx):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
+    
+    # Set bot status
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.competing,
+            name="in the riddle Olympics"
+        )
+    )
+
+    # Add default listened channel if missing
     default_channel_id = 1361523942829068468
     if default_channel_id not in LISTENED_CHANNELS:
         LISTENED_CHANNELS.append(default_channel_id)
