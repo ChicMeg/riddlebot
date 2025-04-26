@@ -226,4 +226,4 @@ if not TOKEN:
     print("❌ DISCORD_TOKEN is not set.")
 else:
     print("✅ Starting bot...")
-    bot.run(TOKEN))
+    bot.run(TOKEN)
