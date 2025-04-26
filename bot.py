@@ -244,7 +244,11 @@ async def on_message(message):
 
         await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{correct}**")
 
-        # Select a new riddle
+        # Remove the correct riddle from the rotation
+        del riddles[current_riddle["question"]]
+        save_data()
+
+        # Select a new riddle if available
         if riddles:
             question, answer = random.choice(list(riddles.items()))
             current_riddle["question"] = question
