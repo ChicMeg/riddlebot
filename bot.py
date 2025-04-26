@@ -160,10 +160,16 @@ async def deleteriddle(ctx):
 
 @bot.command(name="riddle")
 async def riddle(ctx):
-    if not current_riddle["question"]:
-        await ctx.send("🤔 No riddle is currently active.")
-    else:
+    if current_riddle["question"]:
         await ctx.send(f"🧠 **Current Riddle:**\n{current_riddle['question']}")
+    elif riddles:
+        # Pick a random riddle from stored list
+        question, answer = random.choice(list(riddles.items()))
+        current_riddle["question"] = question
+        current_riddle["answer"] = answer
+        await ctx.send(f"🧠 **Here’s a random riddle:**\n{question}")
+    else:
+        await ctx.send("📭 No riddles available. Add some with `!addriddle`!")
 
 @bot.command(name="cancel")
 async def cancel(ctx):
