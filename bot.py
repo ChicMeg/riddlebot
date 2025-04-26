@@ -3,6 +3,7 @@ import json
 import time
 import threading
 import asyncio
+import random
 from flask import Flask
 from dotenv import load_dotenv
 import discord
@@ -84,12 +85,20 @@ async def on_ready():
             name="in the riddle Olympics"
         )
     )
+
     default_channel_id = 1361523942829068468
     if default_channel_id not in LISTENED_CHANNELS:
         LISTENED_CHANNELS.append(default_channel_id)
         save_data()
 
-# --- Updated Commands ---
+    # Set random riddle on startup
+    if riddles and not current_riddle["question"]:
+        question, answer = random.choice(list(riddles.items()))
+        current_riddle["question"] = question
+        current_riddle["answer"] = answer
+        print(f"🧩 Loaded riddle: {question}")
+
+# --- Commands ---
 
 @bot.command(name="addriddle")
 @commands.has_permissions(administrator=True)
@@ -149,6 +158,13 @@ async def deleteriddle(ctx):
     except asyncio.TimeoutError:
         await ctx.send("⌛ Timed out. Please try `!deleteriddle` again.")
 
+@bot.command(name="riddle")
+async def riddle(ctx):
+    if not current_riddle["question"]:
+        await ctx.send("🤔 No riddle is currently active.")
+    else:
+        await ctx.send(f"🧠 **Current Riddle:**\n{current_riddle['question']}")
+
 @bot.command(name="cancel")
 async def cancel(ctx):
     await ctx.send("⚠️ Cancel functionality is no longer needed with new `!addriddle`.")
@@ -190,7 +206,7 @@ async def on_message(message):
         return
 
     if isinstance(message.channel, discord.DMChannel):
-        return  # prevent bot from processing guesses in DMs
+        return
 
     if message.channel.id not in LISTENED_CHANNELS:
         return
@@ -219,6 +235,20 @@ async def on_message(message):
         await message.add_reaction("✅")
         scores[str(message.author)] = scores.get(str(message.author), 0) + 1
         save_data()
+
+        await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{correct}**")
+
+        # Select a new riddle
+        if riddles:
+            question, answer = random.choice(list(riddles.items()))
+            current_riddle["question"] = question
+            current_riddle["answer"] = answer
+            await message.channel.send(f"🧠 **Next Riddle:**\n{question}")
+        else:
+            current_riddle["question"] = None
+            current_riddle["answer"] = None
+            await message.channel.send("📭 No more riddles left. Add some with `!addriddle`!")
+
     else:
         await message.add_reaction("❌")
 
