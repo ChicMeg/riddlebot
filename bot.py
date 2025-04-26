@@ -2,6 +2,7 @@ import os
 import json
 import time
 import threading
+import asyncio
 from flask import Flask
 from dotenv import load_dotenv
 import discord
@@ -60,7 +61,6 @@ if not isinstance(LISTENED_CHANNELS, list):
     save_json(LISTENED_FILE, LISTENED_CHANNELS)
 
 guess_timestamps = {}
-pending_riddle_creations = {}
 current_riddle = {"question": None, "answer": None}
 
 def save_data():
@@ -78,50 +78,80 @@ async def globally_ignore_channels(ctx):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    
-    # Set bot status
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.competing,
             name="in the riddle Olympics"
         )
     )
-
-    # Add default listened channel if missing
     default_channel_id = 1361523942829068468
     if default_channel_id not in LISTENED_CHANNELS:
         LISTENED_CHANNELS.append(default_channel_id)
         save_data()
 
-# Traditional commands below:
+# --- Updated Commands ---
 
 @bot.command(name="addriddle")
 @commands.has_permissions(administrator=True)
-async def addriddle(ctx, *, question: str):
-    user_id = ctx.author.id
-    pending_riddle_creations[user_id] = question.strip()
-    await ctx.author.send(
-        f"📝 Got your riddle: `{question}`\nPlease send the **answer** here in DM."
-    )
+async def addriddle(ctx):
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    await ctx.send("📝 Please enter the **riddle question**:")
+
+    try:
+        question_msg = await bot.wait_for("message", check=check, timeout=60)
+        question = question_msg.content.strip()
+
+        await ctx.send("✅ Got it. Now please enter the **answer**:")
+
+        answer_msg = await bot.wait_for("message", check=check, timeout=60)
+        answer = answer_msg.content.strip().lower()
+
+        riddles[question] = answer
+        save_data()
+
+        await ctx.send(f"✅ Riddle added!\n**Q:** {question}\n**A:** {answer}")
+
+    except asyncio.TimeoutError:
+        await ctx.send("⌛ Timed out. Please try `!addriddle` again.")
 
 @bot.command(name="deleteriddle")
 @commands.has_permissions(administrator=True)
-async def deleteriddle(ctx, *, question: str):
-    if question in riddles:
-        del riddles[question]
-        save_data()
-        await ctx.send("🗑️ Riddle deleted.")
-    else:
-        await ctx.send("❌ Riddle not found.")
+async def deleteriddle(ctx):
+    if not riddles:
+        await ctx.send("📭 No riddles to delete.")
+        return
+
+    questions = list(riddles.keys())
+    max_display = min(10, len(questions))
+    riddle_list = "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions[:max_display]))
+
+    await ctx.send(f"🗑️ **Select a riddle to delete (1-{max_display}):**\n{riddle_list}")
+
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
+
+    try:
+        msg = await bot.wait_for("message", check=check, timeout=60)
+        choice = int(msg.content.strip())
+
+        if 1 <= choice <= max_display:
+            question_to_delete = questions[choice - 1]
+            del riddles[question_to_delete]
+            save_data()
+            await ctx.send(f"✅ Deleted riddle: `{question_to_delete}`")
+        else:
+            await ctx.send("❌ Invalid selection number.")
+
+    except ValueError:
+        await ctx.send("❌ Please enter a valid number.")
+    except asyncio.TimeoutError:
+        await ctx.send("⌛ Timed out. Please try `!deleteriddle` again.")
 
 @bot.command(name="cancel")
 async def cancel(ctx):
-    user_id = ctx.author.id
-    if user_id in pending_riddle_creations:
-        pending_riddle_creations.pop(user_id)
-        await ctx.send("❌ Riddle creation cancelled.")
-    else:
-        await ctx.send("⚠️ No riddle in progress.")
+    await ctx.send("⚠️ Cancel functionality is no longer needed with new `!addriddle`.")
 
 @bot.command(name="listen")
 @commands.has_permissions(administrator=True)
@@ -156,21 +186,17 @@ async def leaderboard(ctx):
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author == bot.user or message.channel.id not in LISTENED_CHANNELS:
+    if message.author == bot.user:
+        return
+
+    if isinstance(message.channel, discord.DMChannel):
+        return  # prevent bot from processing guesses in DMs
+
+    if message.channel.id not in LISTENED_CHANNELS:
         return
 
     user_id = message.author.id
     content = message.content.strip()
-
-    # Riddle answer input by admin
-    if user_id in pending_riddle_creations:
-        question = pending_riddle_creations.pop(user_id)
-        riddles[question] = content.lower()
-        save_data()
-        await message.channel.send(
-            f"✅ Riddle added!\n**Q:** {question}\n**A:** {content}"
-        )
-        return
 
     if current_riddle["question"] is None or content.startswith("!"):
         return
@@ -200,4 +226,4 @@ if not TOKEN:
     print("❌ DISCORD_TOKEN is not set.")
 else:
     print("✅ Starting bot...")
-    bot.run(TOKEN)
+    bot.run(TOKEN))
