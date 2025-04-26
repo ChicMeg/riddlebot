@@ -37,7 +37,7 @@ RIDDLES_FILE = "riddles.json"
 IGNORED_FILE = "ignored_channels.json"
 LISTENED_FILE = "listened_channels.json"
 
-COOLDOWN = 300  # 5 minutes
+COOLDOWN = 0  # 5 minutes
 
 def load_json(file, default):
     if os.path.exists(file):
