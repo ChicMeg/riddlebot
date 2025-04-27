@@ -37,7 +37,7 @@ RIDDLES_FILE = "riddles.json"
 IGNORED_FILE = "ignored_channels.json"
 LISTENED_FILE = "listened_channels.json"
 
-COOLDOWN = 0  # 5 minutes
+COOLDOWN = 30 #seconds
 
 def load_json(file, default):
     if os.path.exists(file):
@@ -120,7 +120,7 @@ async def addriddle(ctx):
         riddles[question] = answer
         save_data()
 
-        await ctx.send(f"✅ Riddle added!\n**Q:** {question}\n**A:** {answer}")
+        await ctx.send(f"✅ Riddle added!\n**Q:** {question}\")
 
     except asyncio.TimeoutError:
         await ctx.send("⌛ Timed out. Please try `!addriddle` again.")
@@ -169,7 +169,7 @@ async def riddle(ctx):
         current_riddle["answer"] = answer
         await ctx.send(f"🧠 **Here’s a random riddle:**\n{question}")
     else:
-        await ctx.send("📭 No riddles available. Add some with `!addriddle`!")
+        await ctx.send("📭 No riddles available. (Admin only: Add some with `!addriddle`!)")
 
 @bot.command(name="cancel")
 async def cancel(ctx):
@@ -257,7 +257,7 @@ async def on_message(message):
         else:
             current_riddle["question"] = None
             current_riddle["answer"] = None
-            await message.channel.send("📭 No more riddles left. Add some with `!addriddle`!")
+            await message.channel.send("📭 No more riddles left. (Admin only: Add some with `!addriddle`!)")
 
     else:
         await message.add_reaction("❌")
