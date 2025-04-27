@@ -37,7 +37,7 @@ RIDDLES_FILE = "riddles.json"
 IGNORED_FILE = "ignored_channels.json"
 LISTENED_FILE = "listened_channels.json"
 
-COOLDOWN = 30 #seconds
+COOLDOWN = 30  # seconds
 
 def load_json(file, default):
     if os.path.exists(file):
@@ -91,7 +91,6 @@ async def on_ready():
         LISTENED_CHANNELS.append(default_channel_id)
         save_data()
 
-    # Set random riddle on startup
     if riddles and not current_riddle["question"]:
         question, answer = random.choice(list(riddles.items()))
         current_riddle["question"] = question
@@ -120,7 +119,12 @@ async def addriddle(ctx):
         riddles[question] = answer
         save_data()
 
-        await ctx.send(f"✅ Riddle added!\n**Q:** {question}\")
+        await ctx.send(f"✅ Riddle added!\n**Q:** {question}")
+
+        # 🧹 Delete the admin’s input messages after 5 seconds
+        await asyncio.sleep(5)
+        await question_msg.delete()
+        await answer_msg.delete()
 
     except asyncio.TimeoutError:
         await ctx.send("⌛ Timed out. Please try `!addriddle` again.")
@@ -163,7 +167,6 @@ async def riddle(ctx):
     if current_riddle["question"]:
         await ctx.send(f"🧠 **Current Riddle:**\n{current_riddle['question']}")
     elif riddles:
-        # Pick a random riddle from stored list
         question, answer = random.choice(list(riddles.items()))
         current_riddle["question"] = question
         current_riddle["answer"] = answer
@@ -244,11 +247,9 @@ async def on_message(message):
 
         await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{correct}**")
 
-        # Remove the correct riddle from the rotation
         del riddles[current_riddle["question"]]
         save_data()
 
-        # Select a new riddle if available
         if riddles:
             question, answer = random.choice(list(riddles.items()))
             current_riddle["question"] = question
@@ -258,7 +259,6 @@ async def on_message(message):
             current_riddle["question"] = None
             current_riddle["answer"] = None
             await message.channel.send("📭 No more riddles left. (Admin only: Add some with `!addriddle`!)")
-
     else:
         await message.add_reaction("❌")
 
