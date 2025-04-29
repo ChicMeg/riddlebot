@@ -9,10 +9,33 @@ from dotenv import load_dotenv
 import discord
 from discord.ext import commands
 
+# NEW: For text normalization
+import nltk
+from nltk.stem import WordNetLemmatizer
+
+# Download required NLTK data
+nltk.download("wordnet")
+nltk.download("omw-1.4")
+
+lemmatizer = WordNetLemmatizer()
+
+# Stop words to ignore in answers
+STOP_WORDS = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "with", "and", "or"}
+
+def normalize(text):
+    words = text.lower().split()
+    filtered = [word for word in words if word not in STOP_WORDS]
+    lemmatized = [lemmatizer.lemmatize(word) for word in filtered]
+    return " ".join(lemmatized)
+
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
+
+# Set your channel IDs here
+RIDDLE_CHANNEL_ID = 1365773539495645215 
+ADMIN_CHANNEL_ID = 1361523942829068468 
 
 # Flask server for Render.com health checks
 app = Flask(__name__)
@@ -34,10 +57,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # File paths
 SCORES_FILE = "scores.json"
 RIDDLES_FILE = "riddles.json"
-IGNORED_FILE = "ignored_channels.json"
-LISTENED_FILE = "listened_channels.json"
 
-COOLDOWN = 30  # seconds
+COOLDOWN = 10  # seconds
 
 def load_json(file, default):
     if os.path.exists(file):
@@ -54,27 +75,18 @@ def save_json(file, data):
 
 scores = load_json(SCORES_FILE, {})
 riddles = load_json(RIDDLES_FILE, {})
-IGNORED_CHANNELS = load_json(IGNORED_FILE, [])
-LISTENED_CHANNELS = load_json(LISTENED_FILE, [])
-
-if not isinstance(LISTENED_CHANNELS, list):
-    LISTENED_CHANNELS = [LISTENED_CHANNELS]
-    save_json(LISTENED_FILE, LISTENED_CHANNELS)
-
 guess_timestamps = {}
 current_riddle = {"question": None, "answer": None}
 
 def save_data():
     save_json(SCORES_FILE, scores)
     save_json(RIDDLES_FILE, riddles)
-    save_json(LISTENED_FILE, LISTENED_CHANNELS)
 
-def save_ignored():
-    save_json(IGNORED_FILE, IGNORED_CHANNELS)
-
-@bot.check
-async def globally_ignore_channels(ctx):
-    return ctx.channel.id in LISTENED_CHANNELS
+# Restrict admin commands to a specific channel
+def admin_channel_only():
+    async def predicate(ctx):
+        return ctx.channel.id == ADMIN_CHANNEL_ID
+    return commands.check(predicate)
 
 @bot.event
 async def on_ready():
@@ -86,11 +98,6 @@ async def on_ready():
         )
     )
 
-    default_channel_id = 1361523942829068468
-    if default_channel_id not in LISTENED_CHANNELS:
-        LISTENED_CHANNELS.append(default_channel_id)
-        save_data()
-
     if riddles and not current_riddle["question"]:
         question, answer = random.choice(list(riddles.items()))
         current_riddle["question"] = question
@@ -101,17 +108,20 @@ async def on_ready():
 
 @bot.command(name="addriddle")
 @commands.has_permissions(administrator=True)
+@admin_channel_only()
 async def addriddle(ctx):
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
-    await ctx.send("📝 Please enter the **riddle question**:")
+    # Prompt for question
+    question_prompt = await ctx.send("📝 Please enter the **question**:")
 
     try:
         question_msg = await bot.wait_for("message", check=check, timeout=60)
         question = question_msg.content.strip()
 
-        await ctx.send("✅ Got it. Now please enter the **answer**:")
+        # Prompt for answer
+        answer_prompt = await ctx.send("✅ Got it. Now please enter the **answer**:")
 
         answer_msg = await bot.wait_for("message", check=check, timeout=60)
         answer = answer_msg.content.strip().lower()
@@ -119,11 +129,13 @@ async def addriddle(ctx):
         riddles[question] = answer
         save_data()
 
-        await ctx.send(f"✅ Riddle added!\n**Q:** {question}")
+        await ctx.send(f"✅ Riddle added!")
 
-        # 🧹 Delete the admin’s input messages after 5 seconds
+        # Clean up: delete all input & prompt messages except final confirmation
         await asyncio.sleep(5)
+        await question_prompt.delete()
         await question_msg.delete()
+        await answer_prompt.delete()
         await answer_msg.delete()
 
     except asyncio.TimeoutError:
@@ -131,6 +143,7 @@ async def addriddle(ctx):
 
 @bot.command(name="deleteriddle")
 @commands.has_permissions(administrator=True)
+@admin_channel_only()
 async def deleteriddle(ctx):
     if not riddles:
         await ctx.send("📭 No riddles to delete.")
@@ -162,6 +175,25 @@ async def deleteriddle(ctx):
     except asyncio.TimeoutError:
         await ctx.send("⌛ Timed out. Please try `!deleteriddle` again.")
 
+@bot.command(name="help")
+@commands.has_permissions(administrator=True)
+@admin_channel_only()
+async def help_command(ctx):
+    help_text = (
+        "🛠️ **Riddle Bot Commands:**\n\n"
+        "`!addriddle` - Add a new riddle (you'll be prompted for Q & A)\n"
+        "`!deleteriddle` - Delete a riddle from the list\n"
+        "`!riddle` - Show the current riddle (or a new one if none active)\n"
+        "`!leaderboard` - Show top 10 users by score\n"
+        "`!cancel` - (Deprecated)\n"
+        "`!help` - Show this help message\n\n"
+        "⚙️ **Bot Behavior:**\n"
+        "• Only accepts riddle answers in the designated riddle channel\n"
+        "• Accepts admin commands only in the admin channel\n"
+        "• Ignores common words (e.g. 'a', 'the') and plurals when checking answers\n"
+        "• Guess cooldown: 10 seconds per user"
+    )
+    await ctx.send(help_text)
 @bot.command(name="riddle")
 async def riddle(ctx):
     if current_riddle["question"]:
@@ -172,31 +204,7 @@ async def riddle(ctx):
         current_riddle["answer"] = answer
         await ctx.send(f"🧠 **Here’s a random riddle:**\n{question}")
     else:
-        await ctx.send("📭 No riddles available. (Admin only: Add some with `!addriddle`!)")
-
-@bot.command(name="cancel")
-async def cancel(ctx):
-    await ctx.send("⚠️ Cancel functionality is no longer needed with new `!addriddle`.")
-
-@bot.command(name="listen")
-@commands.has_permissions(administrator=True)
-async def listen(ctx, channel: discord.TextChannel):
-    if channel.id not in LISTENED_CHANNELS:
-        LISTENED_CHANNELS.append(channel.id)
-        save_data()
-        await ctx.send(f"✅ Now listening to {channel.mention}.")
-    else:
-        await ctx.send(f"⚠️ Already listening to {channel.mention}.")
-
-@bot.command(name="ignore")
-@commands.has_permissions(administrator=True)
-async def ignore(ctx, channel: discord.TextChannel):
-    if channel.id not in IGNORED_CHANNELS:
-        IGNORED_CHANNELS.append(channel.id)
-        save_ignored()
-        await ctx.send(f"✅ Now ignoring {channel.mention}.")
-    else:
-        await ctx.send(f"⚠️ Already ignoring {channel.mention}.")
+        await ctx.send("📭 No riddles available.")
 
 @bot.command(name="leaderboard")
 async def leaderboard(ctx):
@@ -211,13 +219,10 @@ async def leaderboard(ctx):
 async def on_message(message):
     await bot.process_commands(message)
 
-    if message.author == bot.user:
+    if message.author == bot.user or isinstance(message.channel, discord.DMChannel):
         return
 
-    if isinstance(message.channel, discord.DMChannel):
-        return
-
-    if message.channel.id not in LISTENED_CHANNELS:
+    if message.channel.id != RIDDLE_CHANNEL_ID:
         return
 
     user_id = message.author.id
@@ -230,22 +235,22 @@ async def on_message(message):
     last_guess = guess_timestamps.get(user_id, 0)
     if now - last_guess < COOLDOWN:
         remaining = int(COOLDOWN - (now - last_guess))
-        mins, secs = divmod(remaining, 60)
+        mins, secs = divmod(remaining, 30)
         await message.channel.send(
-            f"⏳ {message.author.mention}, wait {mins}m {secs}s to guess again."
+            f"⏳ {message.author.mention}, wait {secs}s to guess again."
         )
         return
 
     guess_timestamps[user_id] = now
-    guess = content.lower()
-    correct = current_riddle["answer"]
+    guess = normalize(content)
+    correct = normalize(current_riddle["answer"])
 
     if guess == correct:
         await message.add_reaction("✅")
         scores[str(message.author)] = scores.get(str(message.author), 0) + 1
         save_data()
 
-        await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{correct}**")
+        await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{current_riddle['answer']}**")
 
         del riddles[current_riddle["question"]]
         save_data()
@@ -258,7 +263,7 @@ async def on_message(message):
         else:
             current_riddle["question"] = None
             current_riddle["answer"] = None
-            await message.channel.send("📭 No more riddles left. (Admin only: Add some with `!addriddle`!)")
+            await message.channel.send("📭 No more riddles left.")
     else:
         await message.add_reaction("❌")
 
