@@ -19,7 +19,6 @@ nltk.download("omw-1.4")
 
 lemmatizer = WordNetLemmatizer()
 
-# Stop words to ignore in answers
 STOP_WORDS = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "with", "and", "or"}
 
 # Load environment variables
@@ -27,40 +26,30 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
 
-# Mapping topic to role IDs for ticketing
+# Channel IDs
+RIDDLE_CHANNEL_ID = 1365773539495645215
+ADMIN_CHANNEL_ID = 1361523942829068468
+TICKET_DISPLAY_CHANNEL_ID = 444444444444444444  # Replace with your ticket channel ID
+CLOSED_TICKETS_CHANNEL_ID = 333333333333333333
+
+# Topic to Role mapping
 TOPIC_MAP = {
-    "account upgrades": 111111111111111111,   # Replace with actual role ID
-    "event information": 222222222222222222,  # Replace with actual role ID
+    "account upgrades": 111111111111111111,
+    "event information": 222222222222222222
 }
 
-# Channel ID where closed ticket logs go
-CLOSED_TICKETS_CHANNEL_ID = 333333333333333333  # Replace with your closed tickets log channel ID
+CLAIMED_TICKETS = {}  # channel_id: mod_user_id
 
-# In-memory storage for claimed tickets (channel_id: moderator_user_id)
-CLAIMED_TICKETS = {}
-
-# Flask server for health checks
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "Riddle bot is running!"
-
-def run_web():
-    app.run(host="0.0.0.0", port=PORT)
-
-threading.Thread(target=run_web).start()
-
-# Discord bot intents and setup
+# Bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# File paths for riddles and scores
+# File paths
 SCORES_FILE = "scores.json"
 RIDDLES_FILE = "riddles.json"
 
-COOLDOWN = 10  # seconds cooldown between guesses
+COOLDOWN = 10
 
 def load_json(file, default):
     if os.path.exists(file):
@@ -90,11 +79,14 @@ def normalize(text):
     lemmatized = [lemmatizer.lemmatize(word) for word in filtered]
     return " ".join(lemmatized)
 
-# IDs for your channels
-RIDDLE_CHANNEL_ID = 1365773539495645215  # Your riddle channel ID
-ADMIN_CHANNEL_ID = 1361523942829068468   # Your admin command channel ID
+@app.route("/")
+def index():
+    return "Riddle bot is running!"
 
-# --- Ticketing system classes ---
+def run_web():
+    app.run(host="0.0.0.0", port=PORT)
+
+threading.Thread(target=run_web).start()
 
 class ClaimButton(discord.ui.Button):
     def __init__(self):
@@ -105,40 +97,15 @@ class ClaimButton(discord.ui.Button):
             await interaction.response.send_message("Only moderators can claim tickets.", ephemeral=True)
             return
 
-        channel = interaction.channel
-
-        if channel.id in CLAIMED_TICKETS:
-            claimer = interaction.guild.get_member(CLAIMED_TICKETS[channel.id])
+        if interaction.channel.id in CLAIMED_TICKETS:
+            claimer = interaction.guild.get_member(CLAIMED_TICKETS[interaction.channel.id])
             await interaction.response.send_message(f"This ticket is already claimed by {claimer.mention}.", ephemeral=True)
             return
 
-        # Save claimer info
-        CLAIMED_TICKETS[channel.id] = interaction.user.id
-        claimer = interaction.user
-
-        # Try to identify ticket creator from recent messages
-        messages = [msg async for msg in channel.history(limit=10)]
-        ticket_creator = None
-        for msg in messages:
-            if msg.mentions:
-                ticket_creator = msg.mentions[0]
-                break
-
-        if not ticket_creator:
-            await interaction.response.send_message("Unable to determine the ticket creator.", ephemeral=True)
-            return
-
-        # Update channel permissions to be private to claimer and ticket creator only
-        overwrites = {
-            interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            claimer: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-            ticket_creator: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        }
-
-        await channel.edit(overwrites=overwrites)
-        await channel.send(
-            f"🔒 Ticket claimed by {claimer.mention}. This ticket is now private between you and {ticket_creator.mention}."
-        )
+        CLAIMED_TICKETS[interaction.channel.id] = interaction.user.id
+        await interaction.channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
+        await interaction.channel.edit(overwrites={key: val for key, val in interaction.channel.overwrites.items() if key != interaction.guild.default_role and key != interaction.guild.me})
+        await interaction.channel.send(f"🔒 Ticket claimed by {interaction.user.mention}")
         await interaction.response.defer()
 
 class CloseButton(discord.ui.Button):
@@ -149,21 +116,12 @@ class CloseButton(discord.ui.Button):
         channel = interaction.channel
         claimer_id = CLAIMED_TICKETS.get(channel.id)
 
-        if (
-            interaction.user.id != claimer_id and
-            not interaction.user.guild_permissions.manage_messages and
-            not interaction.user.permissions_in(channel).manage_channels
-        ):
+        if interaction.user.id != claimer_id and not interaction.user.guild_permissions.manage_messages:
             await interaction.response.send_message("Only the claimer or a moderator can close this ticket.", ephemeral=True)
             return
 
-        # Log ticket close
         closed_log_channel = interaction.guild.get_channel(CLOSED_TICKETS_CHANNEL_ID)
-        log_embed = discord.Embed(
-            title="🎫 Ticket Closed",
-            description=f"**Channel:** {channel.name}\n**Closed by:** {interaction.user.mention}",
-            color=discord.Color.red()
-        )
+        log_embed = discord.Embed(title="🎫 Ticket Closed", description=f"**Channel:** {channel.name}\n**Closed by:** {interaction.user.mention}", color=discord.Color.red())
         await closed_log_channel.send(embed=log_embed)
 
         await interaction.response.send_message("Closing ticket...", ephemeral=True)
@@ -182,10 +140,6 @@ class TicketSelect(discord.ui.Select):
         topic_key = topic_label.lower()
         role_id = TOPIC_MAP.get(topic_key)
 
-        if not role_id:
-            await interaction.response.send_message("Something went wrong. Please try again later.", ephemeral=True)
-            return
-
         guild = interaction.guild
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
@@ -194,165 +148,106 @@ class TicketSelect(discord.ui.Select):
         }
 
         channel_name = f"ticket-{interaction.user.name}-{topic_key.replace(' ', '-')}"
-        channel = await guild.create_text_channel(
-            name=channel_name,
-            overwrites=overwrites,
-            reason=f"Support ticket: {topic_label}"
-        )
+        channel = await guild.create_text_channel(name=channel_name, overwrites=overwrites, reason=f"Support ticket: {topic_label}")
 
         view = discord.ui.View()
         view.add_item(ClaimButton())
         view.add_item(CloseButton())
 
-        await channel.send(
-            f"{interaction.user.mention} has created a ticket for **{topic_label}**.\n"
-            f"{guild.get_role(role_id).mention}, please assist.",
-            view=view
-        )
-        await interaction.response.send_message(f"✅ Your ticket has been created: {channel.mention}", ephemeral=True)
+        await channel.send(f"{interaction.user.mention} has created a ticket for **{topic_label}**.\n{guild.get_role(role_id).mention}, please assist.", view=view)
+        await interaction.response.send_message(f"Your ticket has been created: {channel.mention}", ephemeral=True)
 
 class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__()
         self.add_item(TicketSelect())
 
-class Ticketing(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
+@bot.command()
+async def ticket(ctx):
+    if ctx.channel.id != ADMIN_CHANNEL_ID:
+        await ctx.send("❌ This command must be used in the admin channel.")
+        return
 
-    @commands.command()
-    async def ticket(self, ctx):
-        """Open a support ticket."""
-        await ctx.send("📩 Please select the topic for your ticket:", view=TicketView())
+    ticket_channel = bot.get_channel(TICKET_DISPLAY_CHANNEL_ID)
+    if not ticket_channel:
+        await ctx.send("❌ Ticket display channel not found.")
+        return
 
-# --- End Ticketing system ---
-
-# --- Riddle bot commands and logic ---
-
-# Restrict admin commands to a specific channel
-def admin_channel_only():
-    async def predicate(ctx):
-        return ctx.channel.id == ADMIN_CHANNEL_ID
-    return commands.check(predicate)
+    await ticket_channel.send("📬 Please select the topic for your ticket:", view=TicketView())
+    await ctx.send(f"✅ Ticket interface sent to {ticket_channel.mention}.")
 
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.competing,
-            name="in the riddle Olympics"
-        )
-    )
-
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.competing, name="in the riddle Olympics"))
     if riddles and not current_riddle["question"]:
         question, answer = random.choice(list(riddles.items()))
         current_riddle["question"] = question
         current_riddle["answer"] = answer
         print(f"🧩 Loaded riddle: {question}")
 
-@bot.command(name="addriddle")
-@commands.has_permissions(administrator=True)
-@admin_channel_only()
-async def addriddle(ctx):
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel
-
-    question_prompt = await ctx.send("📝 Please enter the **question**:")
-
-    try:
-        question_msg = await bot.wait_for("message", check=check, timeout=60)
-        question = question_msg.content.strip()
-
-        answer_prompt = await ctx.send("✅ Got it. Now please enter the **answer**:")
-
-        answer_msg = await bot.wait_for("message", check=check, timeout=60)
-        answer = answer_msg.content.strip().lower()
-
-        riddles[question] = answer
-        save_json(RIDDLES_FILE, riddles)
-
-        await ctx.send(f"🆕 Riddle added!\n**Q:** {question}\n**A:** {answer}")
-
-        if not current_riddle["question"]:
-            current_riddle["question"] = question
-            current_riddle["answer"] = answer
-
-    except asyncio.TimeoutError:
-        await ctx.send("⏰ Timeout. Please try adding the riddle again.")
-
 @bot.command(name="riddle")
 async def riddle(ctx):
-    if ctx.channel.id != RIDDLE_CHANNEL_ID:
-        await ctx.send("❌ Please use this command in the designated riddle channel.")
-        return
+    if current_riddle["question"]:
+        await ctx.send(f"🧠 **Current Riddle:**\n{current_riddle['question']}")
+    elif riddles:
+        question, answer = random.choice(list(riddles.items()))
+        current_riddle["question"] = question
+        current_riddle["answer"] = answer
+        await ctx.send(f"🧠 **Here’s a random riddle:**\n{question}")
+    else:
+        await ctx.send("📭 No riddles available.")
 
-    if not current_riddle["question"]:
-        await ctx.send("⚠️ No riddle loaded currently.")
+@bot.command(name="leaderboard")
+async def leaderboard(ctx):
+    if not scores:
+        await ctx.send("No scores yet.")
         return
-
-    await ctx.send(f"🧩 **Riddle:** {current_riddle['question']}")
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    msg = "\n".join(f"**{i+1}.** {user} - {score}" for i, (user, score) in enumerate(sorted_scores[:10]))
+    await ctx.send(f"🏆 **Leaderboard:**\n{msg}")
 
 @bot.event
 async def on_message(message):
-    if message.author.bot:
+    await bot.process_commands(message)
+    if message.author == bot.user or isinstance(message.channel, discord.DMChannel):
         return
-
-    # Check if message is in riddle channel and answer is expected
-    if message.channel.id == RIDDLE_CHANNEL_ID and current_riddle["answer"]:
-        now = time.time()
-        last_guess = guess_timestamps.get(message.author.id, 0)
-        if now - last_guess < COOLDOWN:
-            # Ignore guesses if in cooldown
-            return
-
-        guess_timestamps[message.author.id] = now
-
-        guess_norm = normalize(message.content)
-        answer_norm = normalize(current_riddle["answer"])
-
-        if guess_norm == answer_norm:
-            # Award point to user
-            user_id_str = str(message.author.id)
-            scores[user_id_str] = scores.get(user_id_str, 0) + 1
-            save_json(SCORES_FILE, scores)
-
-            await message.channel.send(f"🎉 Congratulations {message.author.mention}! You got the correct answer. Your score is now {scores[user_id_str]}.")
-
-            # Pick a new riddle randomly
+    if message.channel.id != RIDDLE_CHANNEL_ID:
+        return
+    user_id = message.author.id
+    content = message.content.strip()
+    if current_riddle["question"] is None or content.startswith("!"):
+        return
+    now = time.time()
+    last_guess = guess_timestamps.get(user_id, 0)
+    if now - last_guess < COOLDOWN:
+        remaining = int(COOLDOWN - (now - last_guess))
+        await message.channel.send(f"⏳ {message.author.mention}, wait {remaining}s to guess again.")
+        return
+    guess_timestamps[user_id] = now
+    guess = normalize(content)
+    correct = normalize(current_riddle["answer"])
+    if guess == correct:
+        await message.add_reaction("✅")
+        scores[str(message.author)] = scores.get(str(message.author), 0) + 1
+        save_data()
+        await message.channel.send(f"🎉 {message.author.mention} got it right! The answer was: **{current_riddle['answer']}**")
+        del riddles[current_riddle["question"]]
+        save_data()
+        if riddles:
             question, answer = random.choice(list(riddles.items()))
             current_riddle["question"] = question
             current_riddle["answer"] = answer
-            await message.channel.send(f"🧩 New riddle: {question}")
-
+            await message.channel.send(f"🧠 **Next Riddle:**\n{question}")
         else:
-            # Optional: you can provide hints or ignore
-            pass
+            current_riddle["question"] = None
+            current_riddle["answer"] = None
+            await message.channel.send("📭 No more riddles left.")
+    else:
+        await message.add_reaction("❌")
 
-    await bot.process_commands(message)
-
-@bot.command(name="score")
-async def score(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    user_id_str = str(member.id)
-    user_score = scores.get(user_id_str, 0)
-    await ctx.send(f"📊 {member.display_name}'s score: {user_score}")
-
-@bot.command(name="scores")
-async def scores_cmd(ctx):
-    if not scores:
-        await ctx.send("No scores recorded yet.")
-        return
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    lines = []
-    for user_id, score in sorted_scores[:10]:
-        user = ctx.guild.get_member(int(user_id))
-        name = user.display_name if user else "Unknown User"
-        lines.append(f"{name}: {score}")
-    await ctx.send("🏆 Top scores:\n" + "\n".join(lines))
-
-# Add the ticketing cog
-bot.add_cog(Ticketing(bot))
-
-# Run the bot
-bot.run(TOKEN)
+if not TOKEN:
+    print("❌ DISCORD_TOKEN is not set.")
+else:
+    print("✅ Starting bot...")
+    bot.run(TOKEN)
