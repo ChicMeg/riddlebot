@@ -22,16 +22,142 @@ lemmatizer = WordNetLemmatizer()
 # Stop words to ignore in answers
 STOP_WORDS = {"a", "an", "the", "of", "in", "on", "at", "to", "for", "with", "and", "or"}
 
-def normalize(text):
-    words = text.lower().split()
-    filtered = [word for word in words if word not in STOP_WORDS]
-    lemmatized = [lemmatizer.lemmatize(word) for word in filtered]
-    return " ".join(lemmatized)
+from discord.ext import commands
+import discord
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 4000))
+
+# Mapping topic to role IDs
+TOPIC_MAP = {
+    "account upgrades": 111111111111111111,
+    "event information": 222222222222222222
+}
+
+# Channel ID where closed ticket logs go
+CLOSED_TICKETS_CHANNEL_ID = 333333333333333333  # Replace this
+
+# In-memory storage for claimed tickets
+CLAIMED_TICKETS = {}  # channel_id: mod_user_id
+
+
+class ClaimButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Claim Ticket", style=discord.ButtonStyle.primary)
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_messages:
+            await interaction.response.send_message("Only moderators can claim tickets.", ephemeral=True)
+            return
+
+        if interaction.channel.id in CLAIMED_TICKETS:
+            claimer = interaction.guild.get_member(CLAIMED_TICKETS[interaction.channel.id])
+            await interaction.response.send_message(f"This ticket is already claimed by {claimer.mention}.", ephemeral=True)
+            return
+
+        CLAIMED_TICKETS[interaction.channel.id] = interaction.user.id
+        await interaction.channel.send(f"🔒 Ticket claimed by {interaction.user.mention}")
+        await interaction.response.defer()
+
+
+class CloseButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Close Ticket", style=discord.ButtonStyle.danger)
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = interaction.channel
+        claimer_id = CLAIMED_TICKETS.get(channel.id)
+
+        if (
+            interaction.user.id != claimer_id and
+            not interaction.user.guild_permissions.manage_messages and
+            not interaction.user.permissions_in(channel).manage_channels
+        ):
+            await interaction.response.send_message("Only the claimer or a moderator can close this ticket.", ephemeral=True)
+            return
+
+        # Log to closed tickets channel
+        closed_log_channel = interaction.guild.get_channel(CLOSED_TICKETS_CHANNEL_ID)
+        log_embed = discord.Embed(
+            title="🎫 Ticket Closed",
+            description=f"**Channel:** {channel.name}\n**Closed by:** {interaction.user.mention}",
+            color=discord.Color.red()
+        )
+        await closed_log_channel.send(embed=log_embed)
+
+        await interaction.response.send_message("Closing ticket...", ephemeral=True)
+        await channel.delete()
+
+
+class TicketSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Account Upgrades", description="Hero gear, Chief gear, Stats, etc."),
+            discord.SelectOption(label="Event Information", description="Ask questions about in-game events")
+        ]
+        super().__init__(placeholder="Choose your support topic...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        topic_label = self.values[0]
+        topic_key = topic_label.lower()
+        role_id = TOPIC_MAP.get(topic_key)
+
+        if not role_id:
+            await interaction.response.send_message("Something went wrong. Please try again later.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.get_role(role_id): discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        channel_name = f"ticket-{interaction.user.name}-{topic_key.replace(' ', '-')}"
+        channel = await guild.create_text_channel(
+            name=channel_name,
+            overwrites=overwrites,
+            reason=f"Support ticket: {topic_label}"
+        )
+
+        view = discord.ui.View()
+        view.add_item(ClaimButton())
+        view.add_item(CloseButton())
+
+        await channel.send(
+            f"{interaction.user.mention} has created a ticket for **{topic_label}**.\n"
+            f"{guild.get_role(role_id).mention}, please assist.",
+            view=view
+        )
+        await interaction.response.send_message(f"Your ticket has been created: {channel.mention}", ephemeral=True)
+
+
+class TicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.add_item(TicketSelect())
+
+
+class Ticketing(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command()
+    async def ticket(self, ctx):
+        """Open a support ticket."""
+        await ctx.send("Please select the topic for your ticket:", view=TicketView())
+
+
+async def setup(bot):
+    await bot.add_cog(Ticketing(bot))
+    
+def normalize(text):
+    words = text.lower().split()
+    filtered = [word for word in words if word not in STOP_WORDS]
+    lemmatized = [lemmatizer.lemmatize(word) for word in filtered]
+    return " ".join(lemmatized)
 
 # Set your channel IDs here
 RIDDLE_CHANNEL_ID = 1365773539495645215 
