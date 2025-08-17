@@ -1,8 +1,0 @@
-services:
-  - type: web
-    name: riddlebot
-    env: python3
-    plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python3 bot.py"
-    autoDeploy: true
